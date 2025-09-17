@@ -24,12 +24,16 @@ st.sidebar.header("Upload Data")
 file = st.sidebar.file_uploader("Upload long-format CSV (Subject, Group, Time, Distance)", type="csv")
 
 if file:
-    long = pd.read_csv(file)
-    st.success(f"Loaded dataset: {long.shape[0]} rows")
+    df = pd.read_csv(file)
 
-    # Ensure factors
+    # Reshape
+    long = df.melt(id_vars=["Group","Rat"], 
+                var_name="Time", 
+                value_name="Distance")
+    long["Time"] = long["Time"].str.extract(r"(\d+)").astype(int)
     long["Group"] = long["Group"].astype("category")
     long["Time"] = long["Time"].astype("category")
+
     st.write("Preview:", long.head())
 
     # ==============================================================

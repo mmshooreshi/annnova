@@ -893,27 +893,71 @@ with tab_tc:
     st.subheader("🔬 تست‌های تعقیبی (Post hoc)")
     if aov is not None:
         sig_effects = aov.query("`p-unc` < 0.05")["Source"].tolist()
-
-        if "Time" in sig_effects:
-            st.markdown("**مقایسه زمان‌ها (Pairwise, Holm correction)**")
-            pw = pg.pairwise_ttests(dv="Distance", within="Time", subject="Subject",
-                                    data=long.rename(columns={"TimeMin":"Time"}),
-                                    padjust="holm")
-            st.dataframe(pw.round(4), use_container_width=True)
-            st.download_button("⬇️ دانلود Post hoc زمان",
-                               pw.to_csv(index=False).encode(),
-                               "posthoc_time.csv", "text/csv")
-
         if "Time * Group" in sig_effects or "Interaction" in sig_effects:
-            st.markdown("**مقایسه زمان × گروه**")
-            pw_int = pg.pairwise_ttests(dv="Distance", within="Time", between="Group",
-                                        subject="Subject",
-                                        data=long.rename(columns={"TimeMin":"Time"}),
-                                        padjust="holm")
-            st.dataframe(pw_int.round(4), use_container_width=True)
-            st.download_button("⬇️ دانلود Post hoc زمان×گروه",
-                               pw_int.to_csv(index=False).encode(),
-                               "posthoc_time_group.csv", "text/csv")
+            st.markdown("**مقایسه زمان × گروه (فقط Interaction واقعی، p-unc < 0.05)**")
+
+            pw_int = pg.pairwise_ttests(
+                dv="Distance",
+                within="Time",
+                between="Group",
+                subject="Subject",
+                data=long.rename(columns={"TimeMin": "Time"}),
+                padjust=None  # raw p-values
+            )
+
+            # Keep only interaction rows:
+            groups = long["Group"].unique().tolist()
+            sig_pw_int = pw_int[
+                (pw_int["Contrast"] == "Time * Group") &      # only interaction rows
+                (pw_int["p-unc"] < 0.05) &                    # significant
+                (pw_int["Time"].notna()) &                    # drop NaNs
+                (pw_int["Time"] != "-")                       # drop the "-" rows
+            ].copy()
+
+            # Convert safely to numeric
+            sig_pw_int["Time"] = pd.to_numeric(sig_pw_int["Time"], errors="coerce")
+
+            # Now filter by Time > 30
+            sig_pw_int = sig_pw_int[sig_pw_int["Time"] > 30]
+            if not sig_pw_int.empty:
+                # --- Dataframe ---
+                st.dataframe(sig_pw_int.round(4), use_container_width=True)
+                st.download_button("⬇️ دانلود Post hoc زمان×گروه (Interaction, Time > 30, p-unc < 0.05)",
+                                sig_pw_int.to_csv(index=False).encode(),
+                                "posthoc_time_group_sig_time_gt30.csv", "text/csv")
+
+                # --- Bar chart ---
+                st.subheader("📊 نمودار مقایسه‌های معنادار (Time > 30)")
+                fig, ax = plt.subplots(figsize=(8, 5))
+
+                # Bar chart with Time on x-axis, group comparisons on y-axis
+                sig_pw_int["Comparison"] = sig_pw_int["A"] + " vs " + sig_pw_int["B"]
+                ax.bar(
+                    sig_pw_int["Comparison"] + " @ " + sig_pw_int["Time"].astype(str),
+                    sig_pw_int["p-unc"]
+                )
+                ax.axhline(0.05, color="red", linestyle="--", label="p=0.05")
+
+                ax.set_ylabel("p-unc value")
+                ax.set_title("Significant Group × Time Comparisons (Time > 30)")
+                ax.legend()
+                plt.xticks(rotation=75, ha="right")
+
+                st.pyplot(fig, use_container_width=True)
+                st.download_button("⬇️ دانلود نمودار مقایسه‌ها",
+                                fig_bytes(fig), "posthoc_bar_chart.png", "image/png")
+
+                # --- Narrative ---
+                st.subheader("📝 گزارش متنی نتایج Interaction معنادار (Time > 30)")
+                text_lines = []
+                for _, row in sig_pw_int.iterrows():
+                    t, g1, g2, p = row["Time"], row["A"], row["B"], row["p-unc"]
+                    text_lines.append(f"- در مرحله {t}، تفاوت بین گروه {g1} و {g2} معنادار بود (p={p:.4f}).")
+                st.markdown("\n".join(text_lines))
+            else:
+                st.info("هیچ مقایسه Interaction زمان × گروهی با p-unc < 0.05 و Time > 30 یافت نشد.")
+
+
 
     # --- Summary & Narrative ---
     if aov is not None:
