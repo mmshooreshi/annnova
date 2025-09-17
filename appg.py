@@ -831,51 +831,43 @@ with tab_tc:
     eps_df = None
     if HAVE_PG:
         try:
+            # Pivot to wide
             wide = long.pivot_table(
                 index="Subject",
                 columns="TimeMin",
                 values="Distance",
                 aggfunc="mean"
             )
+
+            # --- Debugging checks ---
+            st.write("📊 Initial pivot shape:", wide.shape)
+            st.write("📊 Missing values per subject:", wide.isna().sum(axis=1))
+            st.write("📊 Missing values per time:", wide.isna().sum(axis=0))
+
+            # Drop subjects with missing values
             wide = wide.dropna(axis=0, how="any")
+            st.write("✅ After dropna (subjects removed if incomplete):", wide.shape)
+
+            # Drop constant columns (zero variance across subjects)
             nonconst_cols = [c for c in wide.columns if np.nanvar(wide[c].values, ddof=1) > 0]
+            dropped_cols = set(wide.columns) - set(nonconst_cols)
+            if dropped_cols:
+                st.warning(f"⚠️ Dropped constant time bins (no variance): {dropped_cols}")
             wide = wide[nonconst_cols]
 
-            if wide.shape[1] < 3 or wide.shape[0] < 2:
-                st.info("Need ≥ 3 time levels with non-zero variance and ≥ 2 complete subjects to test sphericity.")
-            else:
-                # Mauchly
-                try:
-                    sph = pg.sphericity(wide, method="mauchly")
-                    if isinstance(sph, tuple):
-                        if len(sph) == 4:
-                            W, chi2, dof, pval = sph
-                        elif len(sph) == 2:
-                            W, pval = sph; chi2 = dof = np.nan
-                        else:
-                            W = pval = chi2 = dof = np.nan
-                    else:
-                        W = pval = chi2 = dof = np.nan
-                    sph_df = pd.DataFrame([{"W": W, "chi2": chi2, "df": dof, "p": pval}])
-                    st.dataframe(sph_df.round(4), use_container_width=True)
-                    st.download_button("⬇️ Download Mauchly Test (CSV)",
-                                       sph_df.to_csv(index=False).encode(),
-                                       "mauchly_test.csv",
-                                       "text/csv")
-                except Exception as e:
-                    st.warning(f"Sphericity test failed: {e}")
+            st.write("✅ Final wide matrix shape:", wide.shape)
 
-                # GG/HF epsilons
+            # --- Check conditions before Mauchly ---
+            if wide.shape[1] < 3 or wide.shape[0] < 2:
+                st.error("❌ Not enough data: need ≥3 time bins and ≥2 subjects.")
+            else:
+                # Run Mauchly’s test
                 try:
-                    eps_raw = pg.epsilon(wide)
-                    eps_df = normalize_epsilon(eps_raw)
-                    st.dataframe(eps_df.round(4), use_container_width=True)
-                    st.download_button("⬇️ Download Epsilon Corrections (CSV)",
-                                       eps_df.to_csv().encode(),
-                                       "epsilon_corrections.csv",
-                                       "text/csv")
+                    sphericity, W, chi2, dof, pval = pg.sphericity(wide)
+                    st.success("✅ Mauchly’s test completed.")
+                    st.write("W:", W, "Chi2:", chi2, "df:", dof, "p:", pval)
                 except Exception as e:
-                    st.warning(f"Epsilon computation failed: {e}")
+                    st.error(f"Mauchly test failed: {e}")
         except Exception as e:
             st.warning(f"Sphericity block failed: {e}")
     else:
