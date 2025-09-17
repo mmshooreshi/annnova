@@ -484,6 +484,51 @@ def compact_letter_display(tukey_df: pd.DataFrame, means: pd.Series) -> Dict[str
             cld[g] = cld.get(g, "") + lab
     return cld
 
+
+import numpy as np
+import pandas as pd
+from scipy.stats import chi2
+
+def mauchly_test(df, subject_col="Rat", within_cols=None):
+    """
+    Compute Mauchly’s Test of Sphericity for wide-format data.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Wide-format dataframe (subjects × timepoints).
+    subject_col : str
+        Column for subject IDs (ignored in computation).
+    within_cols : list of str
+        Columns for repeated measures (e.g., time points).
+
+    Returns
+    -------
+    dict with W, chi2, df, p
+    """
+    if within_cols is None:
+        within_cols = df.columns.drop([subject_col, "Group"])
+
+    X = df[within_cols].to_numpy(dtype=float)
+
+    # covariance matrix across time points
+    S = np.cov(X, rowvar=False)
+
+    k = S.shape[0]   # number of timepoints
+    n = X.shape[0]   # number of subjects
+
+    # compute W
+    detS = np.linalg.det(S)
+    trS = np.trace(S)
+    W = detS / ((trS / k) ** k)
+
+    # chi-square statistic
+    df_chi = int((k - 1) * (k + 2) / 2)
+    chi2_stat = -(n - 1) * (2*k + 1) / 6 * np.log(W)
+    p_val = 1 - chi2.cdf(chi2_stat, df_chi)
+
+    return {"W": W, "chi2": chi2_stat, "df": df_chi, "p": p_val}
+
 def format_totals_narrative(desc: pd.DataFrame, aov_es: pd.DataFrame, tukey_df: pd.DataFrame) -> str:
     lines = []
     labels = {
@@ -788,157 +833,160 @@ with tab_qc:
 # =============================== TIME COURSE =================================
 
 # =============================== TIME COURSE =================================
-
+# =============================== TIME COURSE (FINAL PAPER) ===============================
+# =============================== TIME COURSE =================================
 with tab_tc:
-    st.subheader("Mean ± SEM over time — choose a style")
-    style_choice = st.selectbox(
-        "Style",
-        ["A) Ribbon Classic", "B) Errorbar Classic", "C) Marker-Only", "D) Linestyle Suite", "E) Direct-Labeled"],
-        index=0,
-    )
-    variant = style_choice.split(")")[0]
-    fig_tc, ax_tc = plot_timecourse5(summary_tc, group_order, variant=variant)
+    st.header("تحلیل مسیر زمانی (AIH locomotion)")
+
+    # --- Time course plot ---
+    st.subheader("📈 نمودار مسیر زمانی")
+    fig_tc, ax_tc = plot_timecourse5(summary_tc, group_order, variant="B")
     st.pyplot(fig_tc, use_container_width=True)
+    st.download_button("⬇️ دانلود نمودار مسیر زمانی", fig_bytes(fig_tc),
+                       "figure_timecourse.png", "image/png")
 
-    # Save and download
-    st.download_button("⬇️ Download Time-course Plot (PNG)",
-                       fig_bytes(fig_tc),
-                       "figure_timecourse.png",
-                       "image/png")
+    st.markdown("### 📑 Statements you can report (Time course plot)")
+    st.markdown("""
+    - **Main idea:** فعالیت حرکتی حیوانات در طول زمان تغییر کرده است.
+    - **Data needed:** 
+      * میانگین (mean) و خطای معیار (SEM) برای هر فاز زمانی (از جدول summary_tc).
+      * بیشترین مقدار (peak phase) و کمترین مقدار (lowest phase).
+    - **Variables:** Group, TimeMin, Distance.
+    """)
 
-    # ---------- Mixed ANOVA ----------
-    st.markdown("### Mixed ANOVA (within = Time, between = Group)")
-    aov = None
+    # --- Mixed ANOVA ---
+    st.subheader("🔎 آنالیز واریانس با اندازه‌گیری مکرر (Mixed ANOVA)")
+    aov, eps_df = None, None
     if HAVE_PG:
         try:
             aov = mixed_anova_timecourse(long)
             if aov is not None:
                 st.dataframe(aov.round(4), use_container_width=True)
-                st.download_button("⬇️ Download Mixed ANOVA (CSV)",
+                st.download_button("⬇️ دانلود ANOVA",
                                    aov.to_csv(index=False).encode(),
-                                   "mixed_anova.csv",
-                                   "text/csv")
-            else:
-                st.warning("Mixed ANOVA failed on this dataset.")
+                                   "mixed_anova.csv", "text/csv")
         except Exception as e:
-            st.error(f"mixed_anova failed: {e}")
+            st.error(f"Mixed ANOVA failed: {e}")
     else:
-        st.info("Install `pingouin` for mixed ANOVA and sphericity checks (`pip install pingouin`).")
+        st.warning("Install `pingouin` for Mixed ANOVA.")
 
-    # ---------- Sphericity ----------
-    st.markdown("### Sphericity (Mauchly) & GG/HF Corrections (Time factor)")
+    st.markdown("### 📑 Statements you can report (Mixed ANOVA)")
+    st.markdown("""
+    - **Effect of Time:** آیا زمان اثر اصلی دارد؟ 
+      * Data: F, df1, df2, p, η² (from aov).
+    - **Effect of Group:** آیا گروه‌ها تفاوت کلی دارند؟
+      * Data: F, df1, df2, p, η².
+    - **Interaction (Time × Group):** آیا الگوی تغییرات در گروه‌ها متفاوت است؟
+      * Data: F, df1, df2, p, η².
+    - **Variables:** Distance (DV), Time (within), Group (between).
+    """)
 
-    eps_df = None
-    if HAVE_PG:
-        try:
-            # Pivot to wide
-            wide = long.pivot_table(
-                index="Subject",
-                columns="TimeMin",
-                values="Distance",
-                aggfunc="mean"
-            )
+    # --- Mauchly’s Test + Epsilon ---
+    st.subheader("⚖️ آزمون کرویت موچلی + تصحیحات GG/HF")
+    if HAVE_PG and aov is not None:
+        wide = long.pivot_table(index="Subject", columns="TimeMin",
+                                values="Distance", aggfunc="mean")
+        wide = wide.dropna(axis=0, how="any")
+        wide = wide.loc[:, wide.var(axis=0) > 0]
 
-            # --- Debugging checks ---
-            st.write("📊 Initial pivot shape:", wide.shape)
-            st.write("📊 Missing values per subject:", wide.isna().sum(axis=1))
-            st.write("📊 Missing values per time:", wide.isna().sum(axis=0))
+        if wide.shape[1] >= 3 and wide.shape[0] >= 2:
+            try:
+                sph = pg.sphericity(wide, method="mauchly")
+                if isinstance(sph, tuple):
+                    if len(sph) == 4:
+                        W, pval, chi2, dof = sph
+                        st.write(f"χ²({dof}) = {chi2:.2f}, p = {pval:.4g}, W = {W:.4f}")
+                    elif len(sph) == 2:
+                        W, pval = sph
+                        st.write(f"W = {W:.4f}, p = {pval:.4g}")
+            except Exception as e:
+                st.warning(f"Sphericity test failed: {e}")
 
-            # Drop subjects with missing values
-            wide = wide.dropna(axis=0, how="any")
-            st.write("✅ After dropna (subjects removed if incomplete):", wide.shape)
+            try:
+                eps_raw = pg.epsilon(wide)
+                eps_df = normalize_epsilon(eps_raw)
+                st.subheader("Epsilon Corrections")
+                st.dataframe(eps_df.round(4), use_container_width=True)
+                st.download_button("⬇️ دانلود ضرایب اپسیلون",
+                                   eps_df.to_csv().encode(),
+                                   "epsilon_corrections.csv", "text/csv")
+            except Exception as e:
+                st.warning(f"Epsilon computation failed: {e}")
 
-            # Drop constant columns (zero variance across subjects)
-            nonconst_cols = [c for c in wide.columns if np.nanvar(wide[c].values, ddof=1) > 0]
-            dropped_cols = set(wide.columns) - set(nonconst_cols)
-            if dropped_cols:
-                st.warning(f"⚠️ Dropped constant time bins (no variance): {dropped_cols}")
-            wide = wide[nonconst_cols]
+    st.markdown("### 📑 Statements you can report (Sphericity)")
+    st.markdown("""
+    - **Main idea:** آیا فرض کرویت برقرار است یا خیر.
+    - **Data needed:** W, χ², df, p (from Mauchly test).
+    - **If violated:** گزارش کنید که اصلاح Greenhouse-Geisser یا Huynh-Feldt استفاده شد.
+    - **Variables:** repeated Time bins.
+    """)
 
-            st.write("✅ Final wide matrix shape:", wide.shape)
-
-            # --- Check conditions before Mauchly ---
-            if wide.shape[1] < 3 or wide.shape[0] < 2:
-                st.error("❌ Not enough data: need ≥3 time bins and ≥2 subjects.")
-            else:
-                # Run Mauchly’s test
-                try:
-                    sphericity, W, chi2, dof, pval = pg.sphericity(wide)
-                    st.success("✅ Mauchly’s test completed.")
-                    st.write("W:", W, "Chi2:", chi2, "df:", dof, "p:", pval)
-                except Exception as e:
-                    st.error(f"Mauchly test failed: {e}")
-        except Exception as e:
-            st.warning(f"Sphericity block failed: {e}")
-    else:
-        st.info("Install `pingouin` to run sphericity diagnostics (`pip install pingouin`).")
-
-    # ---------- Post hoc tests ----------
-    st.markdown("### Post hoc tests (if needed)")
-
+    # --- Post hoc tests ---
+    st.subheader("🔬 تست‌های تعقیبی (Post hoc)")
     if aov is not None:
         sig_effects = aov.query("`p-unc` < 0.05")["Source"].tolist()
-        if not sig_effects:
-            st.info("No significant effects → no post hoc tests required.")
-        else:
-            if "Group" in sig_effects:
-                st.markdown("**Post hoc for Group (between-subjects): Tukey HSD**")
-                try:
-                    tuk = pairwise_tukeyhsd(long["Distance"], long["Group"])
-                    tuk_df = pd.DataFrame(tuk.summary().data[1:], columns=tuk.summary().data[0])
-                    st.dataframe(tuk_df, use_container_width=True)
-                    st.download_button("⬇️ Download Tukey HSD (CSV)",
-                                       tuk_df.to_csv(index=False).encode(),
-                                       "posthoc_tukey_group.csv",
-                                       "text/csv")
-                except Exception as e:
-                    st.warning(f"Post hoc failed: {e}")
 
-            if "Time" in sig_effects:
-                st.markdown("**Post hoc for Time (within-subjects): Pairwise tests with correction**")
-                try:
-                    pw = pg.pairwise_ttests(dv="Distance", within="Time", subject="Subject",
-                                            data=long.rename(columns={"TimeMin": "Time"}),
-                                            padjust="holm")
-                    st.dataframe(pw, use_container_width=True)
-                    st.download_button("⬇️ Download Time Post hoc (CSV)",
-                                       pw.to_csv(index=False).encode(),
-                                       "posthoc_time.csv",
-                                       "text/csv")
-                except Exception as e:
-                    st.warning(f"Post hoc failed: {e}")
+        if "Time" in sig_effects:
+            st.markdown("**مقایسه زمان‌ها (Pairwise, Holm correction)**")
+            pw = pg.pairwise_ttests(dv="Distance", within="Time", subject="Subject",
+                                    data=long.rename(columns={"TimeMin":"Time"}),
+                                    padjust="holm")
+            st.dataframe(pw.round(4), use_container_width=True)
+            st.download_button("⬇️ دانلود Post hoc زمان",
+                               pw.to_csv(index=False).encode(),
+                               "posthoc_time.csv", "text/csv")
 
-            if "Interaction" in sig_effects or "Time * Group" in sig_effects:
-                st.markdown("**Post hoc for Time × Group: Pairwise tests**")
-                try:
-                    pw_int = pg.pairwise_ttests(dv="Distance", within="Time", between="Group",
-                                                subject="Subject",
-                                                data=long.rename(columns={"TimeMin": "Time"}),
-                                                padjust="holm")
-                    st.dataframe(pw_int, use_container_width=True)
-                    st.download_button("⬇️ Download Time × Group Post hoc (CSV)",
-                                       pw_int.to_csv(index=False).encode(),
-                                       "posthoc_time_group.csv",
-                                       "text/csv")
-                except Exception as e:
-                    st.warning(f"Post hoc failed: {e}")
+        if "Time * Group" in sig_effects or "Interaction" in sig_effects:
+            st.markdown("**مقایسه زمان × گروه**")
+            pw_int = pg.pairwise_ttests(dv="Distance", within="Time", between="Group",
+                                        subject="Subject",
+                                        data=long.rename(columns={"TimeMin":"Time"}),
+                                        padjust="holm")
+            st.dataframe(pw_int.round(4), use_container_width=True)
+            st.download_button("⬇️ دانلود Post hoc زمان×گروه",
+                               pw_int.to_csv(index=False).encode(),
+                               "posthoc_time_group.csv", "text/csv")
 
-    # ---------- Interpretation ----------
-    st.markdown("### Insights & Interpretation")
+    st.markdown("### 📑 Statements you can report (Post hoc)")
+    st.markdown("""
+    - **Before injection:** فاز 1 > فاز 2, فاز 2 > فاز 3 (p values from pairwise).
+    - **After injection:** 
+      * Peak: فاز 3 < فاز 4 (p < 0.001).
+      * Plateau: فازهای 4–7 بدون تفاوت معنادار.
+      * Decline: فاز 7 > فاز 8, فاز 8 > فاز 9.
+    - **Data needed:** mean differences, adjusted p-values (from pw, pw_int).
+    """)
+
+    # --- Summary & Narrative ---
     if aov is not None:
-        lines = []
-        for _, row in aov.iterrows():
-            src, F, pval = row["Source"], row["F"], row["p-unc"]
-            sig = "✅ significant" if pval < 0.05 else "❌ not significant"
-            lines.append(f"• {src}: F={F:.2f}, p={pval:.4g} → {sig}")
-        st.markdown("\n".join(lines))
+        st.subheader("📑 Summary Tables & Reporting")
+        aov_summary = aov[["Source","DF1","DF2","F","p-unc","np2"]].round(4)
+        st.dataframe(aov_summary, use_container_width=True)
+        st.download_button("⬇️ Download ANOVA Summary",
+                           aov_summary.to_csv(index=False).encode(),
+                           "anova_summary.csv","text/csv")
 
-        st.download_button("⬇️ Download Insights (TXT)",
-                           "\n".join(lines).encode(),
-                           "anova_insights.txt",
-                           "text/plain")
-    else:
-        st.info("Run ANOVA first to see interpretation.")
+        st.subheader("Narrative Interpretation")
+        text_lines = []
+        for _, row in aov_summary.iterrows():
+            src, df1, df2, Fv, p, eta = row
+            sig = "معنادار ✅" if p < 0.05 else "غیرمعنادار ❌"
+            text_lines.append(
+                f"• اثر {src}: F({int(df1)},{int(df2)})={Fv:.2f}, p={p:.4g}, η²={eta:.3f} → {sig}"
+            )
+        st.markdown("\n".join(text_lines))
+        st.download_button("⬇️ Download Narrative",
+                           "\n".join(text_lines).encode(),
+                           "anova_narrative.txt","text/plain")
+
+        st.markdown("### 📑 Statements you can report (Narrative summary)")
+        st.markdown("""
+        - **Effect of Time:** تغییرات معنادار در طول زمان.
+          * Data: F, df1, df2, p, η².
+        - **Effect of Group:** آیا گروه‌ها متفاوت بودند؟
+        - **Interaction:** آیا گروه‌ها الگوهای زمانی متفاوتی داشتند؟
+        - **Variables:** Distance, Time, Group.
+        """)
 
 with tab_tot:
     st.subheader("Per-rat metrics: totals, AUC, peak, time-to-peak")
