@@ -840,19 +840,10 @@ with tab_tc:
 
     # --- Time course plot ---
     st.subheader("📈 نمودار مسیر زمانی")
-    fig_tc, ax_tc = plot_timecourse5(summary_tc, group_order, variant="B")
+    fig_tc, ax_tc = plot_timecourse5(summary_tc, group_order, variant="B")  # Errorbars only
     st.pyplot(fig_tc, use_container_width=True)
     st.download_button("⬇️ دانلود نمودار مسیر زمانی", fig_bytes(fig_tc),
                        "figure_timecourse.png", "image/png")
-
-    st.markdown("### 📑 Statements you can report (Time course plot)")
-    st.markdown("""
-    - **Main idea:** فعالیت حرکتی حیوانات در طول زمان تغییر کرده است.
-    - **Data needed:** 
-      * میانگین (mean) و خطای معیار (SEM) برای هر فاز زمانی (از جدول summary_tc).
-      * بیشترین مقدار (peak phase) و کمترین مقدار (lowest phase).
-    - **Variables:** Group, TimeMin, Distance.
-    """)
 
     # --- Mixed ANOVA ---
     st.subheader("🔎 آنالیز واریانس با اندازه‌گیری مکرر (Mixed ANOVA)")
@@ -870,17 +861,6 @@ with tab_tc:
     else:
         st.warning("Install `pingouin` for Mixed ANOVA.")
 
-    st.markdown("### 📑 Statements you can report (Mixed ANOVA)")
-    st.markdown("""
-    - **Effect of Time:** آیا زمان اثر اصلی دارد؟ 
-      * Data: F, df1, df2, p, η² (from aov).
-    - **Effect of Group:** آیا گروه‌ها تفاوت کلی دارند؟
-      * Data: F, df1, df2, p, η².
-    - **Interaction (Time × Group):** آیا الگوی تغییرات در گروه‌ها متفاوت است؟
-      * Data: F, df1, df2, p, η².
-    - **Variables:** Distance (DV), Time (within), Group (between).
-    """)
-
     # --- Mauchly’s Test + Epsilon ---
     st.subheader("⚖️ آزمون کرویت موچلی + تصحیحات GG/HF")
     if HAVE_PG and aov is not None:
@@ -892,13 +872,9 @@ with tab_tc:
         if wide.shape[1] >= 3 and wide.shape[0] >= 2:
             try:
                 sph = pg.sphericity(wide, method="mauchly")
-                if isinstance(sph, tuple):
-                    if len(sph) == 4:
-                        W, pval, chi2, dof = sph
-                        st.write(f"χ²({dof}) = {chi2:.2f}, p = {pval:.4g}, W = {W:.4f}")
-                    elif len(sph) == 2:
-                        W, pval = sph
-                        st.write(f"W = {W:.4f}, p = {pval:.4g}")
+                if isinstance(sph, tuple) and len(sph) >= 4:
+                    W, pval, chi2, dof = sph[0], sph[1], sph[2], sph[3]
+                    st.write(f"χ²({dof}) = {chi2:.2f}, p = {pval:.4g}, W = {W:.4f}")
             except Exception as e:
                 st.warning(f"Sphericity test failed: {e}")
 
@@ -912,14 +888,6 @@ with tab_tc:
                                    "epsilon_corrections.csv", "text/csv")
             except Exception as e:
                 st.warning(f"Epsilon computation failed: {e}")
-
-    st.markdown("### 📑 Statements you can report (Sphericity)")
-    st.markdown("""
-    - **Main idea:** آیا فرض کرویت برقرار است یا خیر.
-    - **Data needed:** W, χ², df, p (from Mauchly test).
-    - **If violated:** گزارش کنید که اصلاح Greenhouse-Geisser یا Huynh-Feldt استفاده شد.
-    - **Variables:** repeated Time bins.
-    """)
 
     # --- Post hoc tests ---
     st.subheader("🔬 تست‌های تعقیبی (Post hoc)")
@@ -947,25 +915,18 @@ with tab_tc:
                                pw_int.to_csv(index=False).encode(),
                                "posthoc_time_group.csv", "text/csv")
 
-    st.markdown("### 📑 Statements you can report (Post hoc)")
-    st.markdown("""
-    - **Before injection:** فاز 1 > فاز 2, فاز 2 > فاز 3 (p values from pairwise).
-    - **After injection:** 
-      * Peak: فاز 3 < فاز 4 (p < 0.001).
-      * Plateau: فازهای 4–7 بدون تفاوت معنادار.
-      * Decline: فاز 7 > فاز 8, فاز 8 > فاز 9.
-    - **Data needed:** mean differences, adjusted p-values (from pw, pw_int).
-    """)
-
     # --- Summary & Narrative ---
     if aov is not None:
         st.subheader("📑 Summary Tables & Reporting")
+
+        # ANOVA summary
         aov_summary = aov[["Source","DF1","DF2","F","p-unc","np2"]].round(4)
         st.dataframe(aov_summary, use_container_width=True)
         st.download_button("⬇️ Download ANOVA Summary",
                            aov_summary.to_csv(index=False).encode(),
                            "anova_summary.csv","text/csv")
 
+        # Narrative
         st.subheader("Narrative Interpretation")
         text_lines = []
         for _, row in aov_summary.iterrows():
@@ -978,15 +939,6 @@ with tab_tc:
         st.download_button("⬇️ Download Narrative",
                            "\n".join(text_lines).encode(),
                            "anova_narrative.txt","text/plain")
-
-        st.markdown("### 📑 Statements you can report (Narrative summary)")
-        st.markdown("""
-        - **Effect of Time:** تغییرات معنادار در طول زمان.
-          * Data: F, df1, df2, p, η².
-        - **Effect of Group:** آیا گروه‌ها متفاوت بودند؟
-        - **Interaction:** آیا گروه‌ها الگوهای زمانی متفاوتی داشتند؟
-        - **Variables:** Distance, Time, Group.
-        """)
 
 with tab_tot:
     st.subheader("Per-rat metrics: totals, AUC, peak, time-to-peak")
